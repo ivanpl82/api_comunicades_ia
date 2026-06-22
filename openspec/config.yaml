@@ -1,0 +1,51 @@
+# openspec/config.yaml
+schema: spec-driven
+
+context: |
+  Project: api_comunicades_ia
+  Stack: Markdown skill definitions for OpenCode agents (Python-ecosystem .gitignore template)
+  Architecture: Skill library — no executable code, no runtime framework
+  Purpose: Repository of LLM agent skills for accessing Spanish open data portals (datos.gob.es, Junta de Andalucía CKAN, etc.)
+  Conventions: SKILL.md frontmatter with name, description, license, metadata; structured Markdown with Activation Contract, Hard Rules, Decision Gates, Execution Steps, Output Contract, References
+  CI: None detected
+  Testing: None available (no test runner detected)
+
+strict_tdd: false
+
+testing:
+  runner:
+    available: false
+    reason: "No test runner detected in project. The project is a Markdown-based skill library with no executable code."
+  layers:
+    unit: false
+    integration: false
+    e2e: false
+  coverage:
+    available: false
+  quality:
+    linter: false
+    type_checker: false
+    formatter: false
+
+rules:
+  proposal:
+    - State intent and scope clearly
+    - Reference existing skills that would be affected
+  specs:
+    - Use Given/When/Then for agent behavior scenarios
+    - Document expected input triggers and output contracts
+  design:
+    - Document API endpoints and data formats for new data portal integrations
+    - Include Python code examples for CKAN/REST API consumption
+  tasks:
+    - Group by skill, keep tasks completable in one session
+  apply:
+    - Follow existing skill Markdown structure (frontmatter, sections)
+    tdd: false
+    test_command: ""
+  verify:
+    test_command: ""
+    build_command: ""
+    coverage_threshold: 0
+  archive:
+    - Warn before merging destructive deltas
