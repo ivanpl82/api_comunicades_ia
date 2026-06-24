@@ -18,7 +18,7 @@
 set -euo pipefail
 
 # ──────────────────────────────────────────────
-# Constantes
+# Constants
 # ──────────────────────────────────────────────
 
 SKILL_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../skills" && pwd)"
@@ -175,6 +175,25 @@ check_portal() {
 }
 
 # ──────────────────────────────────────────────
+# extract_skill_name — Extrae el campo 'name' del frontmatter YAML
+# ──────────────────────────────────────────────
+extract_skill_name() {
+    local file="$1"
+    # Lee línea por línea entre los --- y devuelve el valor de 'name:'
+    while IFS= read -r line; do
+        if [[ "$line" =~ ^name:[[:space:]]*(.+) ]]; then
+            echo "${BASH_REMATCH[1]}" | tr -d "\"' "
+            return 0
+        fi
+        if [[ "$line" =~ ^\.\.\.$ || "$line" =~ ^---$ ]]; then
+            # Segundo --- o ... → fin del frontmatter, no encontramos name
+            break
+        fi
+    done < <(tail -n +2 "$file")  # saltar el primer ---
+    return 1
+}
+
+# ──────────────────────────────────────────────
 # check_portals — Verifica portales según metadatos
 # ──────────────────────────────────────────────
 check_portals() {
@@ -185,8 +204,7 @@ check_portals() {
     local found=0
     local checked=0
 
-    for skill_file in "$OPENCODE_SKILLS"/skill-*.md; do
-        [[ -f "$skill_file" ]] || continue
+    while IFS= read -r -d '' skill_file; do
         found=$((found + 1))
 
         # Extraer metadatos del frontmatter
@@ -213,7 +231,7 @@ check_portals() {
         else
             echo "   [${skill_name}] Sin URL de portal"
         fi
-    done
+    done < <(find "$OPENCODE_SKILLS" -maxdepth 2 -name 'SKILL.md' -print0 | sort -z)
 
     echo ""
     echo "Skills encontrados: ${found} | Portales verificados: ${checked}"
@@ -248,26 +266,41 @@ install_skills() {
         error "No se encontraron skills (skill-*.md) en ${SKILL_DIR}"
     fi
 
-    echo "  Skills a instalar: ${#files[@]}"
+    # Filtrar skills plantilla (api_base con placeholder <...>)
+    local installable=()
+    for f in "${files[@]}"; do
+        local api_base
+        api_base=$(grep -E '^[[:space:]]*api_base:' "$f" | head -1 | sed 's/.*api_base:[[:space:]]*//' | tr -d "\"'")
+        if [[ "$api_base" =~ ^\<.*\>$ ]]; then
+            local name
+            name=$(extract_skill_name "$f" 2>/dev/null || echo "$(basename "$f" .md)")
+            log "Omitiendo plantilla: ${name} (api_base placeholder)"
+            continue
+        fi
+        installable+=("$f")
+    done
+
+    echo "  Skills a instalar: ${#installable[@]} (${#files[@]} encontrados, $(( ${#files[@]} - ${#installable[@]} )) plantillas omitidas)"
     echo ""
 
     # Dry-run: mostrar solo el plan
     if [[ "$DRY_RUN" == true ]]; then
         echo "── Modo dry-run — no se realizarán cambios ──"
         echo ""
-        for f in "${files[@]}"; do
-            local basename
-            basename="$(basename "$f")"
-            local target="${OPENCODE_SKILLS}/${basename}"
+        for f in "${installable[@]}"; do
+            local skill_name
+            skill_name=$(extract_skill_name "$f" || echo "unknown-$(basename "$f" .md)")
+            local dest_dir="${OPENCODE_SKILLS}/${skill_name}"
+            local target="${dest_dir}/SKILL.md"
 
             if [[ -f "$target" ]]; then
                 if diff -q "$f" "$target" &>/dev/null; then
-                    echo "  ✓ ${basename} — ya existe y está actualizado"
+                    echo "  ✓ ${skill_name} — ya existe y está actualizado"
                 else
-                    echo "  ~ ${basename} — se actualizaría (versión diferente)"
+                    echo "  ~ ${skill_name} — se actualizaría (versión diferente)"
                 fi
             else
-                echo "  + ${basename} — se crearía"
+                echo "  + ${skill_name}/SKILL.md — se crearía"
             fi
         done
         echo ""
@@ -294,39 +327,43 @@ install_skills() {
     local skipped=0
     local failed=0
 
-    for f in "${files[@]}"; do
-        local basename
-        basename="$(basename "$f")"
-        local target="${OPENCODE_SKILLS}/${basename}"
+    for f in "${installable[@]}"; do
+        local skill_name
+        skill_name=$(extract_skill_name "$f" || echo "unknown-$(basename "$f" .md)")
+        local dest_dir="${OPENCODE_SKILLS}/${skill_name}"
+        local target="${dest_dir}/SKILL.md"
 
         # Validar frontmatter antes de copiar
         if verify_frontmatter "$f" >/dev/null 2>&1; then
             :
         else
-            warn "Frontmatter inválido en ${basename} — se copiará igualmente"
+            warn "Frontmatter inválido en ${f} — se copiará igualmente"
         fi
 
         if [[ -f "$target" && "$FORCE" != true ]]; then
             if diff -q "$f" "$target" &>/dev/null; then
-                log "  ✓ ${basename} — sin cambios, omitiendo"
+                log "  ✓ ${skill_name} — sin cambios, omitiendo"
                 skipped=$((skipped + 1))
                 continue
             fi
 
-            echo -n "  ¿Sobrescribir ${basename}? [s/N]: "
+            echo -n "  ¿Sobrescribir ${skill_name}? [s/N]: "
             read -r confirm
             if [[ ! "$confirm" =~ ^[sS] ]]; then
-                log "  - ${basename} — omitido"
+                log "  - ${skill_name} — omitido"
                 skipped=$((skipped + 1))
                 continue
             fi
         fi
 
+        # Crear directorio para el skill si no existe
+        mkdir -p "$dest_dir"
+
         if cp "$f" "$target"; then
-            log "  + ${basename} → ${target}"
+            log "  + ${skill_name}/SKILL.md → ${target}"
             copied=$((copied + 1))
         else
-            warn "  ✗ Error al copiar ${basename}"
+            warn "  ✗ Error al copiar ${skill_name}"
             failed=$((failed + 1))
         fi
     done
@@ -344,7 +381,112 @@ install_skills() {
     if [[ "$copied" -gt 0 || "$failed" -gt 0 ]]; then
         echo ""
         info "Instalación completada."
-        info "Reinicia o recarga OpenCode para que los nuevos skills estén disponibles."
+        info "OpenCode reconocerá los skills automáticamente al reiniciar la sesión."
+        info "Los skills se instalaron en: ${OPENCODE_SKILLS}/<nombre>/SKILL.md"
+        echo ""
+
+        # Actualizar registro de skills si se copió algún skill nuevo
+        if [[ "$copied" -gt 0 ]]; then
+            update_registry "${installable[@]}"
+        fi
+
+        echo ""
+        info "Nota: si previamente instalaste skills planos (sin directorio),"
+        info "puedes eliminarlos con: rm -f ${OPENCODE_SKILLS}/skill-*.md"
+    fi
+}
+
+
+# ──────────────────────────────────────────────
+# update_registry — Actualiza el registro de skills
+# ──────────────────────────────────────────────
+update_registry() {
+    local skills_to_register=("$@")
+
+    if [[ ${#skills_to_register[@]} -eq 0 ]]; then
+        return 0
+    fi
+
+    echo ""
+    echo "── Actualizando registro de skills ──"
+    echo ""
+
+    # Detectar skill-registry del sistema
+    local REGISTRY_SKILL="${HOME}/.config/opencode/skills/skill-registry"
+    local ATL_DIR
+    ATL_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.atl" && pwd 2>/dev/null || echo "")"
+
+    # Buscar el .atl más cercano (primero en $SKILL_DIR/../.atl, luego en $HOME)
+    if [[ -z "$ATL_DIR" || ! -d "$ATL_DIR" ]]; then
+        if [[ -d "${SKILL_DIR}/../.atl" ]]; then
+            ATL_DIR="$(cd "${SKILL_DIR}/../.atl" && pwd)"
+        elif [[ -d "${HOME}/.atl" ]]; then
+            ATL_DIR="${HOME}/.atl"
+        fi
+    fi
+
+    local REGISTRY_CACHE="${ATL_DIR}/skills-cache.md"
+
+    # Construir tabla de skills instalados
+    local table=""
+    local count=0
+    for f in "${skills_to_register[@]}"; do
+        local skill_name skill_desc
+        skill_name=$(extract_skill_name "$f" || echo "unknown")
+        skill_desc=$(grep -E '^description:' "$f" | head -1 | sed 's/^description:[[:space:]]*//; s/^"//; s/"$//' 2>/dev/null || echo "")
+        local dest_path="${OPENCODE_SKILLS}/${skill_name}/SKILL.md"
+        table="${table}| \`${skill_name}\` | ${skill_desc} | user | \${HOME}/.config/opencode/skills/${skill_name}/SKILL.md |\n"
+        count=$((count + 1))
+    done
+
+    if [[ -f "${REGISTRY_SKILL}/SKILL.md" ]]; then
+        info "Skill-registry detectado — escribiendo caché local"
+
+        mkdir -p "$(dirname "$REGISTRY_CACHE")"
+        cat > "$REGISTRY_CACHE" <<-REGEOF
+# Skill Registry — Comunidades Autónomas (instalado)
+
+Generado por install-comunidades-ai.sh el $(date +%Y-%m-%d)
+
+| Skill | Trigger / description | Scope | Path |
+|-------|----------------------|-------|------|
+$(echo -e "$table")
+REGEOF
+        info "Registro escrito en ${REGISTRY_CACHE} (${count} skills)"
+
+        # Invocar skill-registry si gentle-ai está disponible
+        if command -v gentle-ai &>/dev/null; then
+            echo ""
+            info "¿Ejecutar skill-registry refresh? Es necesario para que los agentes"
+            echo -n "  detecten las skills en sus búsquedas. [S/n]: "
+            read -r confirm
+            if [[ ! "$confirm" =~ ^[nN] ]]; then
+                info "Ejecutando: gentle-ai skill-registry refresh --force"
+                gentle-ai skill-registry refresh --force --cwd "$(dirname "${SKILL_DIR}")" 2>&1 || \
+                    warn "Error al ejecutar skill-registry (puedes ejecutarlo manualmente)"
+            else
+                info "Puedes ejecutarlo más tarde con:"
+                info "  gentle-ai skill-registry refresh --force"
+            fi
+        else
+            echo ""
+            info "Para que los agentes detecten las skills, ejecuta desde OpenCode:"
+            info "  gentle-ai skill-registry refresh --force"
+        fi
+    else
+        warn "Skill-registry no encontrado — el registro se actualizará al próximo scan de OpenCode"
+        # Aún así escribir el caché local
+        mkdir -p "$(dirname "$REGISTRY_CACHE")"
+        cat > "$REGISTRY_CACHE" <<-REGEOF
+# Skill Registry — Comunidades Autónomas (instalado)
+
+Generado por install-comunidades-ai.sh el $(date +%Y-%m-%d)
+
+| Skill | Trigger / description | Scope | Path |
+|-------|----------------------|-------|------|
+$(echo -e "$table")
+REGEOF
+        info "Registro local escrito en ${REGISTRY_CACHE} (${count} skills)"
     fi
 }
 
