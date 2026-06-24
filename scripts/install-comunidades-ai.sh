@@ -390,9 +390,6 @@ install_skills() {
             update_registry "${installable[@]}"
         fi
 
-        echo ""
-        info "Nota: si previamente instalaste skills planos (sin directorio),"
-        info "puedes eliminarlos con: rm -f ${OPENCODE_SKILLS}/skill-*.md"
     fi
 }
 
